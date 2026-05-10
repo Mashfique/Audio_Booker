@@ -3,7 +3,9 @@
 PDF to Audiobook — detects chapters, cleans text, converts each to an MP3.
 
 Usage:
-    python pdf_to_audiobook.py book.pdf
+    python pdf_to_audiobook.py book.pdf               # convert, one MP3 per chapter
+    python pdf_to_audiobook.py book.pdf --stitch      # convert then stitch into one MP3
+    python pdf_to_audiobook.py --stitch-only <folder> # stitch an existing chapter folder
 
 Requirements:
     pip install pdfplumber edge-tts
@@ -14,6 +16,7 @@ Voices:
     Edit VOICE below to change the narrator.
 """
 
+import argparse
 import asyncio
 import re
 import shutil
@@ -34,11 +37,6 @@ try:
 except ImportError:
     print("ERROR: edge-tts not found. Run: pip install edge-tts")
     sys.exit(1)
-
-if shutil.which("ffmpeg") is None:
-    print("ERROR: ffmpeg not found. Install with: winget install ffmpeg")
-    sys.exit(1)
-
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -189,14 +187,65 @@ async def chapter_to_mp3(text: str, output_path: Path):
         )
 
 
+# ── Stitching ─────────────────────────────────────────────────────────────────
+
+def stitch_folder(folder: Path, output_path: Path):
+    """Concatenate all MP3s in folder (sorted) into a single file."""
+    mp3s = sorted(folder.glob("*.mp3"))
+    if not mp3s:
+        print(f"ERROR: No MP3 files found in {folder}")
+        sys.exit(1)
+
+    print(f"\n[*] Stitching {len(mp3s)} chapter(s) → {output_path.name}")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        list_file = Path(tmpdir) / "list.txt"
+        list_file.write_text(
+            "\n".join(f"file '{p.resolve()}'" for p in mp3s), encoding="utf-8"
+        )
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+             "-i", str(list_file), "-c", "copy", str(output_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+
+    size_mb = output_path.stat().st_size / (1024 * 1024)
+    print(f"[+] Saved: {output_path.resolve()}  ({size_mb:.1f} MB)")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 async def main():
-    if len(sys.argv) < 2:
-        print("Usage: python pdf_to_audiobook.py <book.pdf>")
+    parser = argparse.ArgumentParser(description="PDF to Audiobook converter")
+    parser.add_argument("pdf", nargs="?", help="Path to the PDF file")
+    parser.add_argument("--stitch", action="store_true",
+                        help="Stitch all chapter MP3s into one file after converting")
+    parser.add_argument("--stitch-only", metavar="FOLDER",
+                        help="Skip conversion — stitch an existing chapter folder into one MP3")
+    args = parser.parse_args()
+
+    if shutil.which("ffmpeg") is None:
+        print("ERROR: ffmpeg not found. Install with: winget install ffmpeg")
         sys.exit(1)
 
-    pdf_path = Path(sys.argv[1])
+    # ── stitch-only mode ──────────────────────────────────────────────────────
+    if args.stitch_only:
+        folder = Path(args.stitch_only)
+        if not folder.is_dir():
+            print(f"ERROR: Folder not found: {folder}")
+            sys.exit(1)
+        out = folder.parent / f"{folder.name}_full.mp3"
+        stitch_folder(folder, out)
+        return
+
+    # ── convert mode ─────────────────────────────────────────────────────────
+    if not args.pdf:
+        parser.print_help()
+        sys.exit(1)
+
+    pdf_path = Path(args.pdf)
     if not pdf_path.exists():
         print(f"ERROR: File not found: {pdf_path}")
         sys.exit(1)
@@ -225,6 +274,10 @@ async def main():
         print(f"    → {fname}  ({size_kb} KB)\n")
 
     print(f"[+] Done! {len(chapters)} MP3(s) in: {out_dir.resolve()}")
+
+    if args.stitch:
+        full_mp3 = out_dir.parent / f"{pdf_path.stem}_full.mp3"
+        stitch_folder(out_dir, full_mp3)
 
 
 if __name__ == "__main__":
