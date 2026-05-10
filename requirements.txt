@@ -1,3 +1,4 @@
 pyaudiowpatch
-pydub
 numpy
+pdfplumber
+edge-tts
