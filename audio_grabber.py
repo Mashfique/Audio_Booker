@@ -5,12 +5,13 @@ detected in the browser, saves each segment as an MP3, and keeps the PC
 from sleeping while running.
 
 Requirements:
-    pip install pyaudiowpatch pydub numpy
+    pip install pyaudiowpatch numpy
     ffmpeg must be on PATH (https://ffmpeg.org/download.html)
 """
 
 import ctypes
-import os
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -26,10 +27,10 @@ except ImportError:
     print("ERROR: pyaudiowpatch not found. Run: pip install pyaudiowpatch")
     sys.exit(1)
 
-try:
-    from pydub import AudioSegment
-except ImportError:
-    print("ERROR: pydub not found. Run: pip install pydub")
+if shutil.which("ffmpeg") is None:
+    print("ERROR: ffmpeg not found on PATH.")
+    print("Install it with:  winget install ffmpeg")
+    print("Then open a new PowerShell window and try again.")
     sys.exit(1)
 
 
@@ -78,11 +79,16 @@ def _save_mp3(frames: list[bytes], sample_rate: int, channels: int) -> Path:
         wf.setframerate(sample_rate)
         wf.writeframes(b"".join(frames))
 
-    audio = AudioSegment.from_wav(str(wav_path))
-    audio.export(str(mp3_path), format="mp3", bitrate=MP3_BITRATE)
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(wav_path),
+         "-b:a", MP3_BITRATE, str(mp3_path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=True,
+    )
     wav_path.unlink()
 
-    duration = len(audio) / 1000
+    duration = sum(len(f) for f in frames) / (sample_rate * channels * 2)
     size_kb  = mp3_path.stat().st_size // 1024
     print(f"    Saved: {mp3_path.name}  ({duration:.1f}s, {size_kb} KB)")
     return mp3_path

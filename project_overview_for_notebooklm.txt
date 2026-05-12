@@ -1,0 +1,321 @@
+PROJECT OVERVIEW: PDF TO AUDIOBOOK WITH VOICE CLONING
+======================================================
+
+This project has two independent tools built in Python:
+1. Audio Grabber — records system audio from a browser automatically
+2. PDF to Audiobook — converts a PDF book into MP3 audio files using a cloned voice
+
+
+===========================================================
+TOOL 1: AUDIO GRABBER (audio_grabber.py)
+===========================================================
+
+PURPOSE
+-------
+Automatically captures audio playing in any browser or application on Windows,
+saves each audio segment as an MP3 file, and prevents the PC from going to sleep
+while it is running.
+
+HOW IT WORKS — STEP BY STEP
+----------------------------
+
+Step 1: Find the audio device
+The script uses WASAPI (Windows Audio Session API) loopback, which is a Windows
+feature that lets you record whatever is currently playing through your speakers
+or headphones — like a "what you hear" recording. It finds the default playback
+device automatically.
+
+Step 2: Listen for sound
+The script opens an audio stream and continuously monitors the incoming audio
+in small chunks (1024 frames at a time). For each chunk, it calculates the RMS
+(Root Mean Square), which is a measure of the audio's loudness or energy level.
+
+Step 3: Detect when audio starts
+If the RMS value goes above a threshold (default: 200), the script considers
+audio to be playing and starts recording. It prints "Audio detected" to the console.
+
+Step 4: Record while audio is playing
+All incoming audio chunks are collected into memory as raw PCM (uncompressed)
+audio data while the RMS stays above the threshold.
+
+Step 5: Detect when audio stops
+If the RMS drops below the threshold for more than 4 seconds (the silence
+duration setting), the script considers the audio segment to be finished.
+
+Step 6: Save as MP3
+The collected audio frames are first written to a temporary WAV file, then
+ffmpeg (a free audio tool) converts that WAV to an MP3 at 192kbps quality.
+The WAV file is deleted after conversion.
+
+Step 7: Discard short clips
+If a recorded clip is shorter than 2 seconds, it is discarded (likely a sound
+effect or notification rather than meaningful content).
+
+Step 8: Prevent PC sleep
+The script calls a Windows API function (SetThreadExecutionState) to tell
+Windows not to go to sleep while the script is running. When you stop the
+script with Ctrl+C, it re-enables normal sleep behavior.
+
+KEY SETTINGS (configurable at the top of the file)
+---------------------------------------------------
+- SILENCE_THRESHOLD: How loud audio must be to count as "playing" (default 200 RMS)
+- SILENCE_DURATION: Seconds of silence before ending a clip (default 4 seconds)
+- MIN_CLIP_DURATION: Clips shorter than this are thrown away (default 2 seconds)
+- MP3_BITRATE: Quality of saved MP3 files (default 192k)
+- OUTPUT_DIR: Where MP3 files are saved (default: "recordings" folder)
+
+DEPENDENCIES
+------------
+- pyaudiowpatch: Python library for WASAPI loopback audio capture (Windows only)
+- numpy: Used to calculate RMS from raw audio bytes
+- ffmpeg: External tool used to convert WAV to MP3 (must be installed separately)
+
+
+===========================================================
+TOOL 2: PDF TO AUDIOBOOK (pdf_to_audiobook.py + Colab notebook)
+===========================================================
+
+PURPOSE
+-------
+Takes a PDF book and converts it into one MP3 audio file per chapter, using
+either a free Microsoft neural voice or a custom cloned voice (your voice or
+any reference audio).
+
+THE OVERALL PIPELINE
+--------------------
+
+[PDF file]
+    → Extract text per chapter
+    → Clean the text
+    → Split into small chunks
+    → Send each chunk to a TTS (Text-to-Speech) engine
+    → Save each chunk as a WAV file
+    → Convert WAV to MP3
+    → Concatenate all chunks into one MP3 per chapter
+    → (Optional) Stitch all chapters into one full audiobook MP3
+
+DETAILED STEP-BY-STEP PROCESS
+------------------------------
+
+STEP 1: EXTRACT TEXT FROM PDF
+The script uses pdfplumber, a Python library, to read each page of the PDF
+and extract the raw text. PDFs do not store text in reading order by default —
+pdfplumber handles the layout extraction.
+
+Sub-process — Remove repeated lines:
+Headers and footers (like page titles and page numbers) appear on almost every
+page. The script counts how many times each line appears across all pages. Lines
+that appear 5 or more times are treated as headers/footers and removed.
+
+Sub-process — Detect chapter headings:
+The script looks for lines that match patterns like "Chapter 1", "Chapter One",
+"Part II", "Prologue", "Epilogue", "Introduction", etc. using regular expressions.
+When a chapter heading is found, a new chapter is started.
+
+Sub-process — Collect chapter text:
+All lines between chapter headings are collected as the body text of that chapter.
+
+STEP 2: CLEAN THE TEXT
+Before sending text to the TTS engine, several cleaning steps are applied:
+
+- Fix hyphenated line breaks: Words split across lines like "impor-\ntant" are
+  rejoined to "important"
+- Remove page numbers: Standalone numbers on their own line are removed
+- Collapse whitespace: Multiple blank lines become one blank line; multiple spaces
+  become one space
+- Remove control characters: Invisible non-printable characters from the PDF
+  are stripped out
+- Fix ALL-CAPS words: Words like "ACT" or "CHAPTER" written in all capitals get
+  converted to "Act" or "Chapter" so the TTS engine reads them as words, not
+  letter by letter (e.g., "A... C... T..."). Known acronyms like NASA, FBI, DNA,
+  GPU are preserved in capitals.
+
+STEP 3: SPLIT INTO CHUNKS
+TTS engines have limits on how much text they can process at once. The text
+for each chapter is split into smaller pieces at sentence boundaries (after
+periods, exclamation marks, or question marks). Each piece is roughly 200 words
+(for voice cloning) or 4000 characters (for the free Microsoft voice).
+Splitting at sentence boundaries ensures words are never cut mid-sentence.
+
+STEP 4: TEXT-TO-SPEECH CONVERSION
+The script supports multiple TTS engines:
+
+ENGINE A — edge-tts (free, default)
+Uses Microsoft's neural text-to-speech API over the internet. No reference
+audio needed. Produces a natural-sounding voice (default: Aria, US English).
+Fast and free. Does not clone a specific person's voice.
+
+ENGINE B — Chatterbox TTS (used in the Colab notebook)
+An open-source model by Resemble AI (released 2025) that clones a voice from
+a short reference audio sample. The reference audio (your voice clip) is
+analyzed to extract a "voice fingerprint" — pitch, tone, rhythm, accent.
+During inference, new speech is generated that matches those characteristics.
+This is called zero-shot voice cloning (no training required, just a reference).
+
+ENGINE C — XTTS v2 (Coqui, local option)
+Another open-source voice cloning model. Works similarly to Chatterbox but
+requires more VRAM (at least 4 GB dedicated GPU memory). Too slow on CPU for
+long books.
+
+ENGINE D — ElevenLabs (future option, not yet implemented)
+A paid commercial API that produces very high-quality voice cloning.
+
+WHAT IS INFERENCE?
+------------------
+Inference is the process of running a trained AI model to produce an output.
+In this context, the TTS model has already been trained on massive amounts of
+audio data. When we run inference, we are NOT training anything — we are simply
+feeding our text (and a voice reference) into the trained model and asking it
+to generate audio. This is why it works without any setup beyond loading the
+model. It is like asking a calculator to compute: the calculator was "trained"
+during manufacturing, and you are just using it.
+
+STEP 5: SAVE AUDIO FILES
+Each chunk of text produces a WAV audio file (raw uncompressed audio). WAV
+files are large, so each one is immediately converted to MP3 using ffmpeg and
+the original WAV is deleted. The MP3 chunks for one chapter are then
+concatenated into a single MP3 file for that chapter using ffmpeg's concat
+feature (this avoids re-encoding and keeps quality perfect).
+
+STEP 6: (OPTIONAL) STITCH ALL CHAPTERS
+After all chapters are converted, an optional step concatenates all chapter
+MP3s into one single full-audiobook MP3 file.
+
+
+===========================================================
+WHY GOOGLE COLAB?
+===========================================================
+
+Voice cloning models like Chatterbox TTS require a GPU (Graphics Processing
+Unit) to run at a useful speed. A GPU has thousands of small cores optimized
+for the kind of matrix math that AI models use.
+
+The local machine has an NVIDIA MX110 GPU with only 2 GB of dedicated memory
+(VRAM). Chatterbox TTS needs at least 4 GB VRAM to load its model weights.
+Running on CPU instead would take many hours per chapter.
+
+Google Colab provides free access to an NVIDIA T4 GPU with 16 GB VRAM. The
+T4 can process each audio chunk in about 30 seconds, making a full 19-chapter
+book feasible in a few hours.
+
+The Colab notebook is a Jupyter notebook — a document that combines code cells,
+text, and outputs in a browser-based interface connected to a cloud machine.
+
+
+===========================================================
+THE COLAB NOTEBOOK — CELL BY CELL
+===========================================================
+
+Cell 1 — Check GPU
+Verifies that the T4 GPU is available and shows its memory. If no GPU is shown,
+the user must go to Runtime → Change runtime type → T4 GPU.
+
+Cell 2 — Install packages
+Installs all required Python libraries. This must be run every session because
+Colab's free tier starts from a clean machine each time.
+
+Key packages installed:
+- chatterbox-tts: The voice cloning TTS model
+- pdfplumber: PDF text extraction
+- torchvision 0.21.0 (cu124): Computer vision library needed by chatterbox
+- numpy 1.26.4: Numerical computing library, pinned to this version because
+  chatterbox's dependency chain requires numpy 2.0 or lower
+
+After installation, the runtime must be restarted so Python reloads all
+packages with the correct versions, then Cell 2 must be run once more.
+
+Cell 3 — Mount Google Drive
+Connects the Colab runtime to the user's Google Drive so files can be read
+from and saved to Drive.
+
+Cell 4 — Configuration
+The user sets three paths:
+- TXT_DIR: Folder on Drive containing pre-processed .txt files (one per chapter)
+- VOICE_REF: The reference audio file for voice cloning
+- OUTPUT_DIR: Where the output MP3 files will be saved
+
+Cell 5 — Helper functions
+Defines all the reusable functions: text cleaning, chapter extraction, audio
+file utilities (ffmpeg concat, WAV to MP3 conversion).
+
+Cell 6 — Prepare reference audio
+Trims the reference audio to 15 seconds using ffmpeg, starting from 3 seconds
+in (to skip any intro noise). Converts to 22050 Hz mono WAV, which is the
+format Chatterbox expects.
+
+Cell 7 — Load Chatterbox TTS model
+Downloads the model weights (~1-2 GB) from Hugging Face on the first run,
+then loads them onto the GPU. The model weights are cached to Google Drive
+so future sessions load them in seconds instead of downloading again.
+
+Cell 8 — Load chapters
+Reads all .txt files from TXT_DIR, sorts them alphabetically (so files named
+01_chapter.txt, 02_chapter.txt etc. stay in order), and builds a list of
+chapters with their title (filename) and text content.
+
+Cell 9 — Convert chapters to MP3
+The main conversion loop. For each chapter:
+1. Cleans the text
+2. Splits into word-count chunks
+3. For each chunk: runs Chatterbox TTS inference to generate audio, saves as
+   WAV using scipy, converts to MP3 using ffmpeg
+4. Concatenates all chunk MP3s into one chapter MP3
+5. Saves directly to Google Drive
+
+Cell 10 — (Optional) Stitch all chapters
+Concatenates all chapter MP3s into one full audiobook file.
+
+
+===========================================================
+KNOWN ISSUES AND FIXES
+===========================================================
+
+Issue: ALL-CAPS words read letter by letter
+Some PDFs use ALL-CAPS for emphasis (e.g., "THE ACT"). TTS reads this as
+individual letters ("A... C... T..."). Fix: the _fix_allcaps() function
+converts all-caps words to Title Case before TTS processing, while preserving
+real acronyms like NASA and FBI.
+
+Issue: Stuttering in audio
+Suspected cause: anomalies in PDF text extraction — ligature characters
+(ﬁ instead of fi), footnote numbers embedded in text, headers bleeding into
+paragraphs. Solution in progress: extract text to .txt files first, allow
+manual review and cleanup, then use the cleaned .txt files as TTS input.
+
+Issue: torchaudio version conflicts
+Chatterbox installs torch 2.6.0 which has no compatible torchaudio wheel for
+the Colab CUDA version. Fix: removed torchaudio entirely and used scipy's
+wavfile module to write WAV files instead.
+
+Issue: numpy binary incompatibility
+Some libraries compiled against numpy 2.x break when numpy is downgraded to
+1.26.4. Fix: install packages in a specific order (Cell 2) and restart the
+runtime before continuing.
+
+
+===========================================================
+GLOSSARY
+===========================================================
+
+WASAPI: Windows Audio Session API. The Windows system for audio device management.
+Loopback: Recording what is playing through speakers instead of from a microphone.
+RMS: Root Mean Square. A mathematical measure of audio signal strength/loudness.
+PCM: Pulse Code Modulation. Raw uncompressed audio format.
+TTS: Text-to-Speech. Converting written text into spoken audio.
+Voice cloning: Generating speech that sounds like a specific person using a short
+  reference recording of their voice, without any model training.
+Zero-shot: An AI capability that works on new inputs without any task-specific
+  training — just a reference example at inference time.
+Inference: Running a trained AI model to produce output (as opposed to training).
+VRAM: Video RAM. Memory on the GPU used to hold model weights and computation data.
+T4 GPU: An NVIDIA Tesla T4 graphics card with 16 GB VRAM, available free on Colab.
+Colab: Google Colaboratory. A free cloud service that provides Jupyter notebooks
+  with GPU access.
+Jupyter notebook: An interactive document with runnable code cells, used for data
+  science and AI work.
+HuggingFace: A platform that hosts open-source AI model weights for download.
+ffmpeg: A free, open-source command-line tool for audio and video processing.
+pdfplumber: A Python library for extracting text and data from PDF files.
+Chunk: A small piece of text (200 words or 4000 characters) sent to the TTS engine
+  in one request, because TTS models have input size limits.
+Concatenation: Joining multiple audio files end-to-end into one file.
