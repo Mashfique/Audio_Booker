@@ -179,12 +179,14 @@ def _is_number_token(tok: str) -> bool:
     """True if a (lowercased) token participates in a number expression."""
     if any(c.isdigit() for c in tok):
         return True
-    base = tok.replace("-", "").replace("'", "")
-    if base in _NUMBER_WORDS:
+    if tok in _NUMBER_WORDS:
         return True
-    # ordinals written as digits: 1st, 2nd, 3rd, 21st ...
-    if re.fullmatch(r"\d+(st|nd|rd|th)", tok):
-        return True
+    # Hyphenated compound number words: "fifty-one", "twenty-third",
+    # "one-hundred". Every hyphen-separated part must itself be a number word.
+    if "-" in tok:
+        parts = [p for p in tok.split("-") if p]
+        if parts and all(p in _NUMBER_WORDS for p in parts):
+            return True
     return False
 
 
